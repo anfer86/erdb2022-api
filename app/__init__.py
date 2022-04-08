@@ -1,69 +1,47 @@
-from flask import Flask, jsonify, request
-from random import randrange
+from flask import Flask, request
 from flask_cors import CORS
-import json
 import base64
 import torch
-import torch.nn as nn
 from PIL import Image as Pil_Image
-from IPython.display import Image
-from IPython.display import display, Javascript
-import torchvision
-from torchvision import datasets, models, transforms
-import datetime as dt
-import numpy as np
+from torchvision import transforms
+from datetime import datetime
 import io
+from ifsc_facemask.FaceMaskModel import FaceMaskModel
 
-height = 224
-width = 224
-input_size = (height,width)
-img = ""
-FILE = 'modelo_mascara_novo.pth'
-m = torch.load(FILE, map_location=torch.device('cpu'))
-m.eval()
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+input_size = 224
+MODEL_CHECKPOINT_FILE = 'model_checkpoint.ckpt'
+model = FaceMaskModel.load_from_checkpoint(MODEL_CHECKPOINT_FILE)
 
 # Utiliza o modelo para fazer a classificação da imagem recebida por método POST
-def usarModelo(arquivo):
-    image_pil = Pil_Image.open(io.BytesIO(arquivo))  
-    label_desc = {0 : True, 1 : False}
+def predict(imageFile):
+
+    image_pil = Pil_Image.open(io.BytesIO(imageFile))  
+    possui_mascara = {0 : True, 1 : False}
 
     transform_new_images = transforms.Compose([
-        transforms.Resize(input_size),        
+        transforms.Resize(input_size),
+        transforms.CenterCrop(input_size),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     image = transform_new_images(image_pil)
 
-    #Tranformar a imagem para o formato da rede
+    # Transformar a imagem e um array de imagens com uma imagem só
     X = image.unsqueeze(0)
-    X = X.to(device)
-
-    # Executar o modelo treinado
-    output = m(X)
-    output = torch.softmax(output, 1)
-    score, y_pred = torch.max(output, 1)
-
-    print(output)
-    print(score)
-    y_pred_class_desc = label_desc[ y_pred.cpu().data.numpy()[0] ]
-
-    # Mostrar a Saída rede neural e a classe
-    #print('Saída da rede neural:', output)
     
-    print(score[0])
-    print(y_pred_class_desc)
-    scoremod = score.detach().numpy()
-    scoremod = str(scoremod)[1:-1]
-   
-    return y_pred_class_desc, scoremod
+    # Executar o modelo treinado
+    output = model(X)
+    score, y_pred = torch.max(output, 1)
+    score = 1.0
+    
+    y_pred_class_desc = possui_mascara[ y_pred.cpu().data.numpy()[0] ]
+    
+    return y_pred_class_desc, score
 
 
 # Uma função para decodificar a imagem recebida pelo POST
 def decodificaImg64(imagem):
     imgdata = base64.b64decode(str(imagem))    
-    #print(imgdata)
     return imgdata
 
 
@@ -74,24 +52,29 @@ CORS(app)
 def root():
     return jsonify(str(randrange(2)))
 """
-#Método POST para receber a imagem do front-end
+
 @app.route('/req/imagem', methods=["POST"])
-# Função que recebe o JSON da imagem, manipula e utiliza as funções de decodificar e classificar imagem.
 def recebeImage():
-    pegaJSON =  request.json
-    imagem = pegaJSON['link da imagem']
-    sala = pegaJSON['sala']
-    imagemDecodificada = decodificaImg64(imagem)
-    #print(imagemDecodificada)
-    resultado, score = usarModelo(imagemDecodificada)
-    #score = float(score) * 100
-    h = dt.datetime.now()
-    #dia = str(h.day) + "/" + str(h.month) + "/"+ str(h.year)
-    c = {'possui_mascara': resultado, 'confianca' : str(score), 'timestamp' : h, 'sala' : sala}
+    json_request =  request.json
+    if not 'link da imagem' in json_request:
+        app.register_error_handler(400)
+    
+    imagem = json_request.get('link da imagem')
+    sala = json_request.get('sala',"")
+    imageFile = decodificaImg64(imagem)
+        
+    predicted_label, score = predict(imageFile)
+        
+    result_dict = {
+        'possui_mascara': predicted_label, 
+        'confianca' : str(score), 
+        'timestamp' : datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+        'sala' : sala
+    }
 
-
-
-    return c
+    print(result_dict)
+    
+    return result_dict
 
 
 @app.route('/test', methods=["GET"])
